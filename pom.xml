@@ -5,13 +5,13 @@
 	<groupId>Mambu-APIs-Java</groupId>
 	<artifactId>Mambu-APIs-Java</artifactId>
 	<name>Mambu Java APIs SDK</name>
-	<version>9.3-bin</version>
+	<version>9.3-bin-cp</version>
 	<url>http://www.mambu.com</url>
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 	</properties>
 	<build>
-		<!-- This section was inserted to fix problem with Maeven plug in for Eclipse: 
+		<!-- This section was inserted to fix problem with Maeven plug in for Eclipse:
 			m2e -->
 		<pluginManagement>
 			<plugins>
@@ -156,7 +156,7 @@
 			<optional>false</optional>
 		</dependency>
 		<dependency>
-			<!-- Needed since Mambu 3.11 for com.google.common.base.Function used 
+			<!-- Needed since Mambu 3.11 for com.google.common.base.Function used
 				in CustomField -->
 			<!-- replaces old google-collect with it's successor - guava -->
 			<groupId>com.google.guava</groupId>

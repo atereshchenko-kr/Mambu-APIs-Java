@@ -1,20 +1,9 @@
 package com.mambu.apisdk.util;
 
-import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.UnsupportedEncodingException;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
+import com.mambu.apisdk.MambuAPIFactory;
+import com.mambu.apisdk.exception.MambuApiException;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.HttpEntity;
@@ -33,17 +22,23 @@ import org.apache.http.conn.ssl.SSLContexts;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.util.EntityUtils;
 
-import com.google.inject.Inject;
-import com.google.inject.Singleton;
-import com.mambu.apisdk.MambuAPIFactory;
-import com.mambu.apisdk.exception.MambuApiException;
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Implementation of executing url requests with basic authorization
- * 
+ *
  * @author edanilkis
- * 
+ *
  */
 @Singleton
 public class RequestExecutorImpl implements RequestExecutor {
@@ -69,7 +64,9 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	private URLHelper urlHelper;
 	private String encodedAuthorization;
-	
+
+	private final HttpClient httpClient = createCustomHttpClient();
+
 	@Inject
 	public RequestExecutorImpl(URLHelper urlHelper) {
 		this.urlHelper = urlHelper;
@@ -111,7 +108,6 @@ public class RequestExecutorImpl implements RequestExecutor {
 	@Override
 	public String executeRequest(String urlString, ParamsMap params, Method method, ContentType contentTypeFormat)
 			throws MambuApiException {
-
 		// Pagination parameters for POST with JSON are to be provided with the URL. See MBU-8975
 		urlString = urlHelper.addJsonPaginationParams(urlString, method, contentTypeFormat, params);
 		urlString = urlHelper.addDetailsParam(urlString, method, contentTypeFormat, params);
@@ -127,10 +123,8 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 		params = addAppKeyToParams(params);
 
-		HttpClient httpClient = createCustomHttpClient();
-				
 		String response = "";
-		
+
 		HttpResponse httpResponse = null;
 		try {
 			httpResponse = executeRequestByMethod(urlString, params, method, contentTypeFormat, httpClient,
@@ -139,6 +133,8 @@ public class RequestExecutorImpl implements RequestExecutor {
 			// Process response
 			response = processResponse(httpResponse, method, contentTypeFormat, urlString, params);
 
+			EntityUtils.consumeQuietly(httpResponse.getEntity());
+
 		} catch (MalformedURLException e) {
 			LOGGER.severe("MalformedURLException: " + e.getMessage());
 			throw new MambuApiException(e);
@@ -146,17 +142,17 @@ public class RequestExecutorImpl implements RequestExecutor {
 			LOGGER.warning("IOException: message= " + e.getMessage());
 			throw new MambuApiException(e);
 		} finally {
-			httpClient.getConnectionManager().shutdown();
+			//httpClient.getConnectionManager().shutdown();
 		}
-		
+
 		return response;
 	}
-	
+
 
 	/**
 	 * Gets the InputStream from the response and converts it into a ByteArrayOutputStream for laster use. (i.e executes
 	 * a request in order to download content and returns it as a ByteArrayOutputStream)
-	 * 
+	 *
 	 * @param urlString
 	 *            the url to execute on. eg: https://demo.mambu.com/api/database/backup/LATEST
 	 * @param params
@@ -182,8 +178,6 @@ public class RequestExecutorImpl implements RequestExecutor {
 		// Mambu may handle API requests differently for different Application Keys
 		params = addAppKeyToParams(params);
 
-		HttpClient httpClient = createCustomHttpClient();
-				
 		ByteArrayOutputStream byteArrayOutputStreamResponse = null;
 		HttpResponse httpResponse = null;
 		try {
@@ -194,6 +188,8 @@ public class RequestExecutorImpl implements RequestExecutor {
 			byteArrayOutputStreamResponse = processInputStreamResponse(httpResponse, method, contentTypeFormat,
 					urlString, params);
 
+			EntityUtils.consumeQuietly(httpResponse.getEntity());
+
 		} catch (MalformedURLException e) {
 			LOGGER.severe("MalformedURLException: " + e.getMessage());
 			throw new MambuApiException(e);
@@ -201,7 +197,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 			LOGGER.warning("IOException: message= " + e.getMessage());
 			throw new MambuApiException(e);
 		} finally {
-			httpClient.getConnectionManager().shutdown();
+			//httpClient.getConnectionManager().shutdown();
 		}
 
 		return byteArrayOutputStreamResponse;
@@ -209,23 +205,23 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Creates an httpClient used to run the API calls
-	 * 
+	 *
 	 * @return newly created httpClient
 	 */
 	private HttpClient createCustomHttpClient() {
-		
-		HttpClient httpClient = HttpClients.custom()
+
+		return HttpClients.custom()
 				// set cookies validation on ignore
 				.setDefaultRequestConfig(RequestConfig.custom().setCookieSpec(CookieSpecs.IGNORE_COOKIES).build())
+				.setMaxConnPerRoute(32)
+				.setMaxConnTotal(32)
 				.setSSLSocketFactory(createSslConnectionSocketFactory())
 				.build();
-
-		return httpClient;
 	}
 
 	/**
 	 * Creates custom SSLConnectionSocketFactory and set it to use only the TLSv1.2 as supported protocol
-	 * 
+	 *
 	 * @return newly created SSLConnectionSocketFactory
 	 */
 	private SSLConnectionSocketFactory createSslConnectionSocketFactory() {
@@ -240,7 +236,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 	/**
 	 * Process and return the response to an HTTP request. Throw MambuApiException if request failed. Logs the response
 	 * details. Currently used to download DB backup dumps.
-	 * 
+	 *
 	 * @param httpResponse
 	 *            HTTP response
 	 * @param method
@@ -300,7 +296,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Converts the InputStream passed as parameter to this method into a ByteArrayOutputStream
-	 * 
+	 *
 	 * @param inputStream
 	 *            The InputStream to be transformed
 	 * @return A ByteArrayOutputStream
@@ -317,7 +313,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Logs the exception details in case an error occurred while processing the response.
-	 * 
+	 *
 	 * @param method
 	 *            The HTTP method
 	 * @param contentType
@@ -357,7 +353,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Adds the application key to the parameter map received as parameter to this
-	 * 
+	 *
 	 * @param paramsMap
 	 *            The parameters map where the application key will be added. The application key will be added only if
 	 *            it was specified.
@@ -382,9 +378,9 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Logs the Curl details for the request.
-	 * 
+	 *
 	 * NOTE: This method logs output only when the Logger level is set to FINEST.
-	 * 
+	 *
 	 * @param urlString
 	 *            The URL as String
 	 * @param params
@@ -406,7 +402,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Logs to the details of an API request
-	 * 
+	 *
 	 * @param urlString
 	 *            The URL to be printed in logs
 	 * @param params
@@ -415,7 +411,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 	 *            HTTP method to be logged
 	 * @param contentTypeFormat
 	 *            The content type to be logged
-	 * 
+	 *
 	 */
 	private void logApiRequestDetails(String urlString, ParamsMap params, Method method,
 			ContentType contentTypeFormat) {
@@ -428,7 +424,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 	/**
 	 * Delegates the request executions to more specialized methods based on HTTP method type. Returns the HTTP response
 	 * after executing the requests.
-	 * 
+	 *
 	 * @param urlString
 	 *            URL string for the HTTP request
 	 * @param params
@@ -529,7 +525,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 		HttpPatch httpPatch = new HttpPatch(urlString);
 		httpPatch.setHeader(CONTENT_TYPE_HEADER_NAME, contentType);
 		httpPatch.setHeader(AUTHORIZATION_HEADER_NAME, "Basic " + encodedAuthorization);
-		httpPatch.setHeader(USER_AGENT_HEADER_NAME, urlHelper.userAgentHeaderValue()); 
+		httpPatch.setHeader(USER_AGENT_HEADER_NAME, urlHelper.userAgentHeaderValue());
 
 		// Format jsonEntity
 		StringEntity jsonEntity = makeJsonEntity(params);
@@ -544,7 +540,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/***
 	 * Execute a GET request as per the interface specification
-	 * 
+	 *
 	 * @param httpClient
 	 *            http client
 	 * @param urlString
@@ -563,7 +559,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 		HttpGet httpGet = new HttpGet(urlString);
 		// add Authorozation header
 		httpGet.setHeader(AUTHORIZATION_HEADER_NAME, "Basic " + encodedAuthorization);
-		httpGet.setHeader(USER_AGENT_HEADER_NAME, urlHelper.userAgentHeaderValue()); 
+		httpGet.setHeader(USER_AGENT_HEADER_NAME, urlHelper.userAgentHeaderValue());
 
 		// execute
 		HttpResponse httpResponse = httpClient.execute(httpGet);
@@ -574,12 +570,12 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/***
 	 * Execute a DELETE request as per the interface specification
-	 * 
+	 *
 	 * @param httpClient
 	 *            http client
-	 * 
+	 *
 	 * @param urlString
-	 * 
+	 *
 	 * @param params
 	 *            ParamsMap with parameters
 	 * @return Http Response
@@ -604,7 +600,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Make StringEntity for HTTP requests from the JSON string supplied in the ParamsMap
-	 * 
+	 *
 	 * @param params
 	 *            ParamsMap with JSON string
 	 */
@@ -632,14 +628,14 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Process and return the response to an HTTP request. Throw MambuApiException if request failed. Log response
-	 * 
+	 *
 	 * @param httpResponse
 	 *            HTTP response
 	 * @param method
 	 *            method
 	 * @param contentType
 	 *            content type
-	 * 
+	 *
 	 * @param urlString
 	 *            URL string for the HTTP request
 	 * @param params
@@ -687,24 +683,24 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Reads a stream into a String
-	 * 
+	 *
 	 * @param content
-	 * 
+	 *
 	 * @return
-	 * 
+	 *
 	 * @throws IOException
 	 */
 	private static String readStream(InputStream content) throws IOException {
 
-		String response = "";
+		StringBuilder response = new StringBuilder();
 
 		// read the response content
 		BufferedReader in = new BufferedReader(new InputStreamReader(content, UTF8_CHARSET));
 		String line;
 		while ((line = in.readLine()) != null) {
-			response += line;
+			response.append(line);
 		}
-		return response;
+		return response.toString();
 	}
 
 	@Override
@@ -718,11 +714,11 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Convert Params Map into a List<NameValuePair> for HttpPpost
-	 * 
+	 *
 	 * @param params
-	 * 
+	 *
 	 * @return List<NameValuePair>
-	 * 
+	 *
 	 * @throws
 	 */
 	private static List<NameValuePair> getListFromParams(ParamsMap params) {
@@ -756,13 +752,13 @@ public class RequestExecutorImpl implements RequestExecutor {
 
 	/**
 	 * Add json formatted appKey value to the original json string
-	 * 
+	 *
 	 * @param jsonString
 	 *            original json string
-	 * 
+	 *
 	 * @param params
 	 *            the ParamsMap containing the appKey value (optionally)
-	 * 
+	 *
 	 * @return jsonStringWithAppKey json string with appKey added
 	 */
 	private static String addAppKeyToJson(String jsonString, ParamsMap params) {
@@ -779,7 +775,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 	/**
 	 * Log API request details. This is a helper method for using consistent formating when using Java Logger to print
 	 * the details of the API request
-	 * 
+	 *
 	 * @param logerLevel
 	 *            allowed logger level
 	 * @param method
@@ -790,14 +786,14 @@ public class RequestExecutorImpl implements RequestExecutor {
 	 *            request's url
 	 * @param params
 	 *            the ParamsMap.
-	 * 
+	 *
 	 *            The method shall be invoked before the appKey is added to the map to avoid printing appKey details
-	 * 
+	 *
 	 */
 	private static void logApiRequest(Level logerLevel, Method method, ContentType contentType, String urlString,
 			ParamsMap params) {
 
-		if (!LOGGER.isLoggable(logerLevel) || method == null) {
+		if (/*!LOGGER.isLoggable(logerLevel) || */method == null) {
 			return;
 		}
 
@@ -868,12 +864,12 @@ public class RequestExecutorImpl implements RequestExecutor {
 	 * be used for subsequent testing and troubleshooting: to execute Mmabu API requests as curl commands with exactly
 	 * the same request params and to compare wrapper built requests with the curl patterns required by Mambu for this
 	 * API.
-	 * 
+	 *
 	 * NOTE: This method logs output only when the Logger level is set to FINEST.
-	 * 
+	 *
 	 * Log output example: curl -G -H "Content-type: application/x-www-form-urlencoded; charset=UTF-8" -d 'appkey=...'
 	 * https://user:pwd@tenant.mambu.com/api/loans?offset=0&limit=5
-	 * 
+	 *
 	 * @param method
 	 *            request's method
 	 * @param contentType
@@ -915,7 +911,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 		// Add user agent header
 		String userAgentHeader = (userAgentHeaderValue != null)
 				? " -H \"" + USER_AGENT_HEADER_NAME + ": " + userAgentHeaderValue + "\"" : null;
-		
+
 		// Make curl command
 		String curlCommand = "curl" + apiMethod + contentHeader + userAgentHeader;
 
@@ -959,7 +955,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 		}
 		// Add placeholder for the user's credentials
 		url = url.replace("://", "://user:pwd@");
-		
+
 		if (urlParams.length() > 0) {
 			String paramsDelimiter = url.contains(QUESTION_MARK_CHARACTER) ? "&" : QUESTION_MARK_CHARACTER;
 			url = url + paramsDelimiter + urlParams;
@@ -992,12 +988,12 @@ public class RequestExecutorImpl implements RequestExecutor {
 	/**
 	 * Log Json string details. This is a helper method for modifying the original Json string to remove details that
 	 * are needed for logging (for example, encoded data when sending documents via Json)
-	 * 
+	 *
 	 * @param logerLevel
 	 *            allowed logger level for logging JSON content
 	 * @param jsonString
 	 *            json string in the API request
-	 * 
+	 *
 	 */
 	private static void logJsonInput(Level logerLevel, String jsonString) {
 
@@ -1028,7 +1024,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 	/**
 	 * Log API response details. This is a helper method for using consistent formating when using Java Logger to print
 	 * the details of the API response
-	 * 
+	 *
 	 * @param logerLevel
 	 *            allowed logger level
 	 * @param urlString
@@ -1079,7 +1075,7 @@ public class RequestExecutorImpl implements RequestExecutor {
 	/**
 	 * Log Application Key details. This is a helper method for logging partial application key details to indicate the
 	 * that application key is used when building the API request
-	 * 
+	 *
 	 * @param applicationKey
 	 *            Application Key string
 	 */
